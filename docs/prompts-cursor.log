@@ -1,0 +1,7 @@
+PROMPT LOG: Cursor
+Date: 2026-11-14
+Scope: every prompt the user sent to Cursor for this project, in order. Prompts sent to Claude Code are in docs/prompts-claude.log.
+
+No prompts have been sent to Cursor yet, so there is no Cursor agent conversation to include. The full conversation for this project is in docs/prompts-claude.log.
+
+The .cursorrules file was written by Claude Code from the prompt logged in docs/prompts-claude.log.

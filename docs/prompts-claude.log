@@ -1,0 +1,102 @@
+# Prompt log: Claude Code
+
+Date: 2026-11-14
+Tool: Claude Code (model: Haiku 5.5)
+Scope: every prompt sent to Claude Code in this project, in order, each followed by my final reply to it. Prompts sent to Cursor are in docs/prompts-cursor.log.
+
+---
+
+## Prompt 1
+
+**Question**
+
+Before we write any C# code, let's inspect the XML and the requirements first. Read `docs/assignment.md` and the sample XML, and generate three files for me:
+1. `specs/architecture.md` - break down what's inside this specific XML (sources, transformations, targets, connectors), propose clean C# models and services (parser, graph builder, SQL generator) using LINQ to XML, and note any edge cases like missing XML attributes.
+2. `CLAUDE.md` - basic project setup, .net commands, and our architectural rules.
+3. `.cursorrules` - same C# coding conventions and defensive XML parsing rules for Cursor.
+4. For CLAUDE.md and .cursorrules specification to save the prompts in 2 separate log files in /docs folder
+
+**Answer**
+
+I wrote the three files and the two prompt logs. No C# was written, so nothing was built or tested.
+
+**Files**
+- `specs/architecture.md`: what the XML contains, the proposed models and services, a transformation-to-SQL table, and 20+ edge cases with their location in the sample.
+- `CLAUDE.md`: project layout, `dotnet` commands, 10 architecture rules, and testing and working conventions.
+- `.cursorrules`: C# conventions and defensive LINQ to XML rules, matching `CLAUDE.md`.
+- `docs/prompts-claude-md.log` and `docs/prompts-cursorrules.log`: your prompt verbatim in each, with a header naming the deliverable. Your request covered all three files at once, so each log holds the full prompt. I read item 4 as "log the prompts for the CLAUDE.md and .cursorrules work", so tell me if you wanted something different.
+
+**What the XML contains**
+- 3 mappings: staging (RAW to STG), enriched marts, and core marts.
+- 12 sources, 16 targets, 98 transformations, 1,066 connectors.
+- The STG tables are targets of the staging mapping and sources of the mart mappings, so dbt needs `ref()` chaining with staging built first.
+
+**Things that will bite the converter**
+- The file declares Windows-1252 and has an external DTD reference. The parser must ignore DTD processing and register the code page.
+- 1,253 table attributes are `VALUE=""`, and 799 ports have no `EXPRESSION` (pass-through). Both are treated as normal, not as errors.
+- Some instances are aliases (`ORDER_FINANCIALS1`, `RAW_PRODUCTS1`), so the graph has to be keyed by instance name.
+- `DATE_DIFF(a, b, 'DD')` means `a - b` in Informatica but takes its arguments in the opposite order in DuckDB.
+
+**Choices I made (listed in spec section 6, easy to change)**
+- DuckDB as the target dialect, since the jaffle shop reference runs on it.
+- Tables for all models, with no incremental logic.
+- Sorters become no-ops, and row-order logic is rewritten as window functions.
+- Unsupported logic is flagged, never dropped.
+
+**Still unverified**
+- The Windows-1252 provider requirement and the Joiner outer-join direction. Both are marked "verify" in the spec and should be checked in the first build phase.
+- Whether the customer sequence expressions truly depend on sorted input.
+
+The test project doesn't reference `source/` yet. `CLAUDE.md` gives the one-line command to add it before we write tests.
+
+## Prompt 2
+
+**Question**
+
+Rename  prompts-claude-md.log to prompts-claude.log and prompts-cursorrules.log to prompts-cursor.log
+
+**Answer**
+
+Renamed both logs:
+- `docs/prompts-claude-md.log` is now `docs/prompts-claude.log`
+- `docs/prompts-cursorrules.log` is now `docs/prompts-cursor.log`
+
+Each file also referred to the other by its old name in its header, so I updated those lines too. No other file in the repo referenced the old names.
+
+## Prompt 3
+
+**Question**
+
+The last message is not included in claude prompts log. On the other hand log for the cursor prompts contains the initial prompt in claude. Claude logs should contain every claude prompt and no cursor prompts - cursor logs should contain every and only cursor prompts
+
+**Answer**
+
+I rewrote both logs so each holds only the prompts it should.
+
+- **`docs/prompts-claude.log`** now has every prompt you sent to Claude Code, in order: the original request, the rename request, and your message about the logs. The original request is no longer in the Cursor log.
+- **`docs/prompts-cursor.log`** has no prompts. You haven't sent any prompt to Cursor, and `.cursorrules` was written by Claude Code from the original request. The file now says so.
+
+If you did send something to Cursor, paste it here and I'll add it to the Cursor log.
+
+## Prompt 4
+
+**Question**
+
+One more - iclude the full agent conversation in both log files
+
+**Answer**
+
+Both logs are updated.
+
+- **`docs/prompts-claude.log`** now contains the full Claude Code conversation after the prompt list, about 116 KB. I exported it from the session transcript on disk, so it includes every message, tool call and tool result in order. The one exception is the model's internal reasoning blocks, which I left out. The export covers the session up to its last saved entry, so the message you're reading now may not be in it.
+- **`docs/prompts-cursor.log`** has no agent conversation because nothing has been run in Cursor. The log says so and points to the Claude log.
+
+## Prompt 5
+
+**Question**
+
+Make it more-simple - just a question, as it was before, and then the answer in addition
+
+**Answer**
+
+The log now has one question and one answer for each prompt you sent to Claude Code, with the answer being my final reply for that turn. The answer to this request is this line; the log was written before my reply to it was finished.

@@ -1,0 +1,75 @@
+# Cursor rules: PowerCenter XML to dbt converter (C#)
+
+Context: a .NET 8 console app that converts Informatica PowerCenter mapping XML into dbt models. Design lives in specs/architecture.md. Project rules for Claude live in CLAUDE.md. Keep both in agreement with this file.
+
+## Language and project
+
+- Target .NET 8, C# 12. `<Nullable>enable</Nullable>` and `<ImplicitUsings>enable</ImplicitUsings>` are set. Do not disable either, and do not add `#nullable disable`.
+- Use file-scoped namespaces: `namespace PwcToDbtConverter.Parsing;`.
+- One public type per file. File name matches the type name.
+- Models are `sealed record` types with positional parameters. No setters, no public mutable collections. Expose `IReadOnlyList<T>` and `IReadOnlyDictionary<TKey, TValue>`.
+- Enums are plain enums. Use `[Flags]` only for `PortType`.
+- Public services are `interface` + `sealed class`. Inject dependencies through the constructor. No static mutable state. No service locator.
+- Use `var` only when the type is obvious from the right-hand side. Otherwise spell the type.
+- Use `is null` / `is not null`, never `== null`, for reference checks.
+- Use `string.Equals(a, b, StringComparison.Ordinal)` for Informatica names. Port and instance names are case sensitive in the XML.
+- Use collection expressions (`[]`) and pattern matching where they make code shorter and clearer, but do not chain them into one long expression.
+- No `#region`. No commented-out code. No `TODO` without a name and a diagnostic it corresponds to.
+- Comments explain why, not what. Match the density of the surrounding file. Public services get a short `///` summary. Private helpers usually need none.
+- Names: PascalCase for types, methods and public members. camelCase for locals and parameters. `_camelCase` for private fields. No Hungarian prefixes. No abbreviations except widely known ones (`Xml`, `Sql`, `Id`).
+
+## Defensive XML parsing (LINQ to XML)
+
+These rules apply to every line that reads from an `XElement`, `XAttribute` or `XDocument`.
+
+- Load documents with explicit reader settings, never `XDocument.Load(path)`:
+  ```csharp
+  var settings = new XmlReaderSettings
+  {
+      DtdProcessing = DtdProcessing.Ignore,   // Prohibit throws on the DOCTYPE in PowerCenter exports
+      XmlResolver = null,                     // never fetch powrmart.dtd from disk or network
+  };
+  using var reader = XmlReader.Create(path, settings);
+  var doc = XDocument.Load(reader);
+  ```
+- Never call `.Value` on an attribute that might be missing. Use explicit casts to nullable types: `(string?)element.Attribute("NAME")`.
+- Never call `.Attribute(...)!` or `.Element(...)!` to silence the compiler. Handle the null path.
+- Treat an empty attribute the same as a missing one. PowerCenter writes `VALUE=""` for most unset table attributes. Use one helper for this, for example `XmlAttributeReader.Read(element, "VALUE")`, which returns `null` for both cases.
+- Do not assume element order. Use `Elements("PORT")` and sort by an explicit position when order matters (local variables depend on it).
+- Find elements by name and attribute values, not by position or by counting.
+- Do not throw for unknown element types, unknown `TYPE` values, unknown `PORTTYPE` values or missing optional attributes. Record a `Diagnostic` with the mapping name, instance and message, and carry on.
+- Throw only for input that cannot be read at all: missing file, not XML, no `POWERMART` root. Wrap that in one exception type with the file path in the message.
+- Use `StringComparison.Ordinal` when matching XML names. XML is case sensitive.
+- Decode entities through the XML reader. Do not replace `&apos;`, `&gt;` or `&#xD;&#xA;` by hand.
+- Normalise whitespace in expressions (`\r\n` and runs of spaces) before translation. Expressions in these exports contain newlines.
+- Register the Windows-1252 code page before reading, since the XML declares `encoding="Windows-1252"`.
+- Never strip digits from names to recover originals. Use `REF_FIELD` when present.
+- Never key a lookup by transformation name when instance names are needed. An instance can be an alias (`ORDER_FINANCIALS1`).
+
+## Architecture rules
+
+- Layers flow one way: `Parsing` → `Model` → `Graph` → `Translation` → `Sql` → `Dbt`. Never reach back into an earlier layer.
+- Only `Parsing` may use `System.Xml` types. Nothing downstream may return or accept `XElement`, `XAttribute` or `XmlReader`.
+- Graph nodes are keyed by instance name.
+- Expressions are translated only by `Translation`, through the tokenizer and recursive-descent parser. Do not use regex replacement on Informatica syntax. Nested `IIF` breaks it.
+- Anything that cannot be converted produces a `Diagnostic` and a `-- UNSUPPORTED` comment in SQL. Logic is never dropped silently.
+- Output is deterministic: sort models, columns and YAML entries by name. Use `\n` line endings and no trailing whitespace.
+- Keep SQL dialect code in `Translation` or `Sql`. Target dialect is DuckDB for now.
+- Do not hard-code jaffle shop models, column names or SQL in source or tests.
+
+## Testing (xUnit)
+
+- Test files mirror the source folders: `Parsing/`, `Graph/`, `Translation/`, `Sql/`.
+- Use `[Fact]` for single cases and `[Theory]` with `[InlineData]` for table-driven expression cases.
+- Use small inline XML snippets for edge cases. Use the sample file only for inventory and integration tests, and resolve its path from the repo root.
+- Assert exact values. Do not write tests that only check "no exception".
+- Test names describe the behaviour: `Parse_EmptyAttributeValue_ReturnsNull`, `Translate_NestedIif_BecomesNestedCase`.
+- Never use `Assert.True(x.Any())` where a count or an exact value can be asserted.
+
+## Things not to do
+
+- Do not add a package without a reason in the commit message or PR description.
+- Do not add `async` or threading. The workload is a single-file batch conversion.
+- Do not use `dynamic`, `Reflection` or `JsonSerializer` on the XML. Use LINQ to XML.
+- Do not add logging frameworks or DI containers. Use constructor injection and a plain `Program.cs` composition root.
+- Do not write placeholder implementations that return `null` or `""` silently. Throw `NotImplementedException` only in an interface stub that is not yet called.
