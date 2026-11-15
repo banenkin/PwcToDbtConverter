@@ -115,7 +115,7 @@ public class PowerMartXmlParserTests
               <REPOSITORY NAME="REPO">
                 <FOLDER NAME="FOLDER">
                   <MAPPING NAME="m_test" ISVALID="YES">
-                    <TRANSFORMATION NAME="LKP_TEST" TYPE="Lookup Procedure"/>
+                    <TRANSFORMATION NAME="RNK_TEST" TYPE="Rank"/>
                   </MAPPING>
                 </FOLDER>
               </REPOSITORY>
@@ -129,8 +129,8 @@ public class PowerMartXmlParserTests
         Diagnostic diagnostic = Assert.Single(document.Diagnostics);
         Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
         Assert.Equal("m_test", diagnostic.Mapping);
-        Assert.Equal("LKP_TEST", diagnostic.Instance);
-        Assert.Contains("Lookup Procedure", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Equal("RNK_TEST", diagnostic.Instance);
+        Assert.Contains("Rank", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]

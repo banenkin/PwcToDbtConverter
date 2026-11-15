@@ -488,6 +488,8 @@ public sealed class PowerMartXmlParser : IPowerMartParser
             "Joiner" => TransformationKind.Joiner,
             "Sorter" => TransformationKind.Sorter,
             "Aggregator" => TransformationKind.Aggregator,
+            "Lookup Procedure" => TransformationKind.Lookup,
+            "Lookup" => TransformationKind.Lookup,
             "Router" => TransformationKind.Router,
             _ => TransformationKind.Unsupported,
         };

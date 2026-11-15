@@ -1,6 +1,6 @@
 # Graph builder spec (Step 2)
 
-Status: design for implementation in Cursor. Builds on the Step 1 code in `source/Model` and `source/Parsing`, and on decisions 7–10 in `specs/architecture.md`.
+Status: implemented in `source/Graph`. Builds on the Step 1 code in `source/Model` and `source/Parsing`, and on decisions 7–10 in `specs/architecture.md`. G014 warns only when a source qualifier has an upstream instance that is not a source, because this export connects every source definition into its qualifier.
 
 What this step does: turn one `MappingDef` into a graph, then answer three questions for the SQL generator:
 
@@ -144,7 +144,7 @@ Run in this order. Diagnostics go into one list, in the order they are found.
 | Source instance has no outgoing connector | `G009` | Info |
 | Joiner has fewer than 2 upstream instances | `G012` | Warning |
 | Union (custom template) has fewer than 2 upstream instances | `G013` | Warning |
-| Source Qualifier has an upstream instance | `G014` | Warning |
+| Source Qualifier has an upstream instance that is not a source | `G014` | Warning |
 | Non-source transformation has no upstream instance | `G015` | Warning |
 | Transformation has no downstream instance (dead end) | `G016` | Info |
 

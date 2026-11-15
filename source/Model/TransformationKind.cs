@@ -8,6 +8,7 @@ public enum TransformationKind
     Joiner,
     Sorter,
     Aggregator,
+    Lookup,
     Router,
     Union,
     Unsupported,

@@ -1,6 +1,6 @@
 # Architecture: PowerCenter XML to dbt converter
 
-Status: step 1 (parse and inventory) and step 3 (expression translator) are implemented. Step 2 (graph) is specified in `docs/graph-spec.md` and is not implemented yet. The C# in section 3 matches the records in `source/Model`. The expression golden strings live in `docs/expression-rules.md`.
+Status: steps 1 through 4 are implemented. `SqlGenerator` produces one dbt model per target. The C# in section 3 matches the records in `source/Model`. Expression golden strings live in `docs/expression-rules.md`. The graph contract lives in `docs/graph-spec.md`.
 
 Input: `sample-data/FLOWLINE_DEMO_JAFFLESHOP.xml` (728 KB, declares `encoding="Windows-1252"`, has a `<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">`).
 Reference target: `dbt-labs/jaffle_shop_duckdb`, used to sanity-check output. Nothing in the converter may hard-code jaffle shop SQL.
@@ -73,7 +73,7 @@ public enum ExpressionKind { None, General, GroupBy }
 public enum TransformationKind
 {
     SourceQualifier, Expression, Filter, Joiner, Sorter, Aggregator,
-    Router, Union, Unsupported
+    Router, Lookup, Union, Unsupported
 }
 
 public enum InstanceKind { Source, Target, Transformation }
@@ -160,21 +160,7 @@ public sealed record PowerMartDocument(
 
 Lists keep document order. Attribute dictionaries use ordinal comparison. An empty attribute is stored as `null`, the same as a missing one. The parser hands collections out as arrays and frozen dictionaries.
 
-Graph model:
-
-```csharp
-namespace PwcToDbtConverter.Graph;
-
-public sealed record DataFlowGraph(
-    IReadOnlyDictionary<string, InstanceDef> Nodes,          // key = instance name
-    IReadOnlyList<ConnectorDef> Edges)
-{
-    public IReadOnlyList<string> TopologicalOrder() => /* Kahn's algorithm, ties broken by name */;
-    public IReadOnlyList<string> UpstreamOf(string instanceName) => /* transitive closure */;
-}
-```
-
-Keys are always instance names, never transformation names. The same table can appear several times in one mapping.
+The graph is the class in `docs/graph-spec.md`: nodes keyed by instance name, edges are the valid connectors, `TopologicalOrder` is null on a cycle, and `UpstreamOf` is the ancestor set in that order. Keys are always instance names, never transformation names. The same table can appear several times in one mapping.
 
 ---
 
@@ -199,7 +185,7 @@ source/
   Model/                     records and enums above
   Graph/                     DataFlowGraph.cs, DataFlowGraphBuilder.cs
   Translation/               Tokenizer, Parser, ExpressionTranslator.cs, DuckDb dialect
-  Sql/                       ModelSqlGenerator.cs, one class per transformation kind
+  Sql/                       SqlGenerator.cs, SqlModel.cs
   Dbt/                       DbtProjectWriter.cs
 tests/PwcToDbtConverterTests/
   Parsing/, Graph/, Translation/, Sql/   (xUnit, Fixtures point at sample-data)
@@ -225,15 +211,15 @@ Encoding: the declaration says Windows-1252. .NET does not register that code pa
 
 | Kind | SQL shape | Notes |
 |---|---|---|
-| Source Qualifier | `select ... from {{ source('RAW', 'CUSTOMERS') }}` | If `Sql Query` or `Source Filter` is non-empty, flag it as unsupported and fall back to the plain select. |
-| Expression | `select <passthrough>, <expr> as <port>` | Pass-through is the default for ports with no expression. |
-| Local variable | Staged CTE column | Variables are evaluated in `Position` order and may reference each other (`v_R_SCORE`). |
+| Source Qualifier | `select ... from {{ source(owner, table) }}` | `owner` is `OWNERNAME`, then `DBDNAME`. `table` is the source definition name. A non-empty `Sql Query`, `Source Filter` or `User Defined Join` is a `-- TODO [UNSUPPORTED]` comment and the plain select is still emitted. |
+| Expression | `select <expr> as <port>` | Ports with no expression pass through. |
+| Local variable | Nested `select *, <expr> as <name>` | Variables are evaluated in `Position` order. A `v_PREV_` variable, or a variable whose expression reads its own name, is previous-row state: the expression is kept, with a `-- TODO [UNSUPPORTED]` comment, because a window function would invent an `ORDER BY`. |
 | Filter | `where <condition>` | |
-| Joiner | `join` on `Join Condition` | `Normal Join` is inner. `Master Outer Join` keeps all detail rows, so the detail side is the preserved side. Check against the Informatica Joiner docs before coding. |
-| Sorter | Pass-through | SQL has no ordering semantics here. Logic that depends on row order is turned into window functions. |
-| Aggregator | `group by` for `GroupBy` ports, aggregate functions for the rest | |
-| Router | One CTE per group, `where <group expression>`. Default group = `not (g1 or g2 or ...)` | A row can match several groups in Informatica, so each group is its own CTE. |
-| Union | `union all` of the input groups | Input groups have rename expressions first. Columns match by name. |
+| Joiner | `join` on `Join Condition` | `Normal Join` is inner. `Master Outer Join` is `master left join detail`. `Detail Outer Join` is `detail left join master`. `Full Outer Join` is a full outer join. |
+| Sorter | Pass-through | No `ORDER BY`. A comment says the sorter does not change the row set. |
+| Aggregator | `group by` for `GroupBy` ports, aggregate functions for the rest | Aggregates are allowed only in this shape. |
+| Lookup | `left join {{ source(owner, table) }}` | Connected outputs come from the upstream input. Unconnected outputs come from the lookup table. |
+| Router, Union, anything else | Pass-through select plus `-- TODO [UNSUPPORTED]` | Output ports with an incoming connector keep that column. Other outputs are `null`. A warning is recorded. The logic is not dropped. |
 
 ### 4.3 Expression translation
 
@@ -274,7 +260,7 @@ Golden strings and the rest of the function table are in `docs/expression-rules.
 | Mapping parameter in expression | `$$RUN_DATE` | Replaced with a dbt var. Missing parameter = diagnostic. |
 | Non-empty SQL override or Source Filter | Currently all empty | If non-empty, flag as unsupported and do not silently ignore it. |
 | Load settings | `Truncate target table option = NO`, `Target load type = Bulk` | Ignored for v1. Models are tables. Incremental is not inferred from the XML. |
-| Unknown transformation type | Any new type | Emit an `Unsupported` diagnostic and a `-- UNSUPPORTED` comment in SQL. Never drop the logic silently. |
+| Unknown transformation type | Any new type | Emit a warning and a `-- TODO [UNSUPPORTED]` comment in SQL. Never drop the logic silently. |
 | Connector to an unknown port or instance | Dangling edges | Diagnostic, not an exception. |
 | Type mapping | `varchar2`, `number`, `date/time`, `string` | Map to DuckDB types through one table. Keep precision and scale when present. |
 
@@ -293,6 +279,8 @@ Golden strings and the rest of the function table are in `docs/expression-rules.
 9. **Foreign-key columns keep their reference.** `FieldDef` stores `REFERENCEDDBD`, `REFERENCEDTABLE` and `REFERENCEDFIELD` so relationship tests (decision 6) can be generated from the export.
 10. **Core SQL first.** Within the timebox, Source Qualifier, Expression, Filter, Joiner and Aggregator are translated before Router and Union. Sorter stays a no-op (decision 3). Anything not translated is still parsed, then emitted as a diagnostic and a `-- UNSUPPORTED` comment (decision 4). This export contains no Lookup.
 11. **Expression golden strings come from `docs/expression-rules.md`.** The translator prints those strings and does not yet cast the result to the port type. Integer division is unverified, so that cast waits. Identifiers are copied as written, including `TYPE`, because the checked strings leave it unquoted. An unmapped function or format token stays in the SQL, with a warning and a `/* UNSUPPORTED: ... */` comment. `SUM`, `MAX`, `MIN` and `COUNT` outside an Aggregator are kept and produce a warning.
+12. **Joiner outer join preserves the named side.** `Master Outer Join` keeps every master row (`master left join detail`). `Detail Outer Join` keeps every detail row. Informatica's joiner guide defines it this way. Source instances are read with `{{ source(owner, table) }}`, using `OWNERNAME` and the source definition name. A model-level gap is a `-- TODO [UNSUPPORTED]` comment.
+13. **Previous-row variables are marked, not rewritten.** A variable named `v_PREV_*`, or one whose expression reads its own name, assumes the previous row. `SqlGenerator` keeps the translated expression, adds `-- TODO [UNSUPPORTED]`, and records a warning. Guessing `row_number()` would invent a sort key the expression does not state. Sorter stays a pass-through with no `ORDER BY` (decision 3).
 
 Jaffle shop has no direct counterpart for the 10 mart tables. The best comparison points are its `customers` and `orders` models. The other outputs can only be checked by reading the expressions.
 
