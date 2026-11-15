@@ -1,6 +1,6 @@
 # Architecture: PowerCenter XML to dbt converter
 
-Status: design only. No C# is written yet. The C# shown here is the proposed shape, not existing code.
+Status: step 1 (parse and inventory) and step 3 (expression translator) are implemented. Step 2 (graph) is specified in `docs/graph-spec.md` and is not implemented yet. The C# in section 3 matches the records in `source/Model`. The expression golden strings live in `docs/expression-rules.md`.
 
 Input: `sample-data/FLOWLINE_DEMO_JAFFLESHOP.xml` (728 KB, declares `encoding="Windows-1252"`, has a `<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">`).
 Reference target: `dbt-labs/jaffle_shop_duckdb`, used to sanity-check output. Nothing in the converter may hard-code jaffle shop SQL.
@@ -44,16 +44,16 @@ Output count: 16 target instances, so 16 dbt models if one model is produced per
 
 | XML | Domain model | Notes |
 |---|---|---|
-| `SOURCE` + `SOURCEFIELD` | `SourceDef` + `FieldDef` | `OWNERNAME` gives the schema, `DBDNAME` the connection. `KEYTYPE` (PRIMARY / FOREIGN KEY) and `NULLABLE` feed dbt tests. |
+| `SOURCE` + `SOURCEFIELD` | `SourceDef` + `FieldDef` | `OWNERNAME` gives the schema, `DBDNAME` the connection. `KEYTYPE` (PRIMARY / FOREIGN KEY) and `NULLABLE` feed dbt tests. `REFERENCEDDBD`, `REFERENCEDTABLE` and `REFERENCEDFIELD` stay on the field so a foreign key can become a relationship test. |
 | `TARGET` + `TARGETFIELD` | `TargetDef` + `FieldDef` | Load settings (`Target load type`, `Truncate`, `Update as Update`) live in `ATTRIBUTE`, not here. |
 | `MAPPING` | `MappingDef` | `ISVALID="NO"` becomes a diagnostic. |
-| `INSTANCE` | `InstanceDef` | Name is the node key. `TRANSFORMATION_NAME` may differ (`ORDER_FINANCIALS1` is an instance of `ORDER_FINANCIALS`). |
+| `INSTANCE` | `InstanceDef` | Name is the node key. `TRANSFORMATION_NAME` may differ (`ORDER_FINANCIALS1` is an instance of `ORDER_FINANCIALS`). `ASSOCIATED_SOURCE_INSTANCE` and instance `TABLEATTRIBUTE` values (for example `Pre SQL`) stay on the instance. |
 | `TRANSFORMATION` | `TransformationDef` | `TYPE` plus `TEMPLATENAME` decide the kind. |
 | `TRANSFORMFIELD` | `PortDef` | Port type is parsed into flags. `EXPRESSION` may be absent. |
 | `GROUP` | `GroupDef` | Router groups carry `EXPRESSION`, `OUTPUT/DEFAULT` is the fallback. |
 | `TABLEATTRIBUTE` | `Attributes` dictionary | Empty `VALUE=""` becomes `null`. Known keys get typed accessors. |
 | `CONNECTOR` | `ConnectorDef` | `FROMINSTANCE.FROMFIELD -> TOINSTANCE.TOFIELD`. |
-| `MAPPINGVARIABLE` | `MappingVariableDef` | Used to fill `$$RUN_DATE` defaults. |
+| `MAPPINGVARIABLE` | `MappingVariableDef` | Stored on the mapping that declares it. `$$RUN_DATE` is declared on `m_FL_JS_MARTS_ENRICHED`, which is also where the expressions use it. |
 | `SESSION`, `WORKFLOW`, `WORKFLOWLINK` | Not modelled in v1 | Only needed later, to order mappings. |
 
 ---
@@ -78,10 +78,35 @@ public enum TransformationKind
 
 public enum InstanceKind { Source, Target, Transformation }
 
+public enum KeyType { None, Primary, Foreign }
+
+public sealed record FieldDef(
+    string Name,
+    string DataType,
+    int? Precision,
+    int? Scale,
+    bool IsNullable,
+    KeyType KeyType,
+    string? ReferencedDbd,
+    string? ReferencedTable,
+    string? ReferencedField);
+
+public sealed record SourceDef(
+    string Name,
+    string? OwnerName,
+    string? DbdName,
+    string? DatabaseType,
+    IReadOnlyList<FieldDef> Fields);
+
+public sealed record TargetDef(
+    string Name,
+    string? DatabaseType,
+    IReadOnlyList<FieldDef> Fields);
+
 public sealed record PortDef(
     string Name,
     PortType Type,
-    int Position,                 // document order: local variables depend on it
+    int Position,                 // 0-based document order: local variables depend on it
     string DataType,
     int? Precision,
     int? Scale,
@@ -102,9 +127,16 @@ public sealed record TransformationDef(
     IReadOnlyList<GroupDef> Groups,
     IReadOnlyDictionary<string, string?> Attributes);
 
-public sealed record InstanceDef(string Name, string TransformationName, InstanceKind Kind);
+public sealed record InstanceDef(
+    string Name,
+    string TransformationName,
+    InstanceKind Kind,
+    IReadOnlyList<string> AssociatedSourceInstances,
+    IReadOnlyDictionary<string, string?> Attributes);
 
 public sealed record ConnectorDef(string FromInstance, string FromField, string ToInstance, string ToField);
+
+public sealed record MappingVariableDef(string Name, string? DataType, string? DefaultValue, bool IsParameter);
 
 public sealed record Diagnostic(DiagnosticSeverity Severity, string Mapping, string? Instance, string Message);
 
@@ -115,18 +147,18 @@ public sealed record MappingDef(
     bool IsValid,
     IReadOnlyList<InstanceDef> Instances,
     IReadOnlyList<TransformationDef> Transformations,
-    IReadOnlyList<ConnectorDef> Connectors);
+    IReadOnlyList<ConnectorDef> Connectors,
+    IReadOnlyList<MappingVariableDef> Variables);
 
 public sealed record PowerMartDocument(
     string FolderName,
     IReadOnlyList<SourceDef> Sources,
     IReadOnlyList<TargetDef> Targets,
     IReadOnlyList<MappingDef> Mappings,
-    IReadOnlyDictionary<string, string?> MappingVariables,   // "$$RUN_DATE" -> default
     IReadOnlyList<Diagnostic> Diagnostics);
 ```
 
-`SourceDef` and `TargetDef` each hold their `FieldDef` list (name, data type, precision, scale, nullable, key type).
+Lists keep document order. Attribute dictionaries use ordinal comparison. An empty attribute is stored as `null`, the same as a missing one. The parser hands collections out as arrays and frozen dictionaries.
 
 Graph model:
 
@@ -183,13 +215,11 @@ var settings = new XmlReaderSettings
 };
 using var reader = XmlReader.Create(path, settings);
 XDocument doc = XDocument.Load(reader);
-
-// Attribute helper: missing and empty both become null
-static string? Attr(XElement e, string name) =>
-    string.IsNullOrWhiteSpace((string?)e.Attribute(name)) ? null : (string)e.Attribute(name)!;
 ```
 
-Encoding: the declaration says Windows-1252. .NET does not register that code page by default, so `System.Text.Encoding.CodePages` must be registered before reading. This still needs to be verified in Phase 1.
+`XmlAttributeReader.Read` returns null for a missing attribute and for an empty or whitespace value. The parser does not use `.Value` or a null-forgiving operator on attributes.
+
+Encoding: the declaration says Windows-1252. .NET does not register that code page by default, so the parser registers `System.Text.Encoding.CodePages` before reading. The inventory test loads the sample, so that code page is exercised.
 
 ### 4.2 Transformation to SQL rules
 
@@ -211,11 +241,13 @@ Encoding: the declaration says Windows-1252. .NET does not register that code pa
 |---|---|---|
 | `IIF(c, a, b)` | `case when c then a else b end` | Nested IIF is common. |
 | `ISNULL(x)` | `x is null` | |
-| `LTRIM(RTRIM(x))` | `trim(x)` | |
-| `UPPER`, `TRUNC(date)` | `upper`, `cast(x as date)` | |
-| `DATE_DIFF(a, b, 'DD')` | `date_diff('day', b, a)` | Informatica returns `a - b`. DuckDB takes the start first, so the argument order flips. Classic bug source. |
-| `$$RUN_DATE` | `{{ var('run_date', '2025-12-31') }}` | Default comes from `MAPPINGVARIABLE`. |
-| `COUNT(*)`, `SUM(...)` in aggregators | same | Only valid under an Aggregator. |
+| `LTRIM`, `RTRIM` | `ltrim`, `rtrim` | Nesting stays. `LTRIM(RTRIM(x))` does not become `trim(x)`. |
+| `UPPER`, `TRUNC(date)` | `upper`, `cast(x as date)` | `TRUNC` in this export has no format argument. |
+| `DATE_DIFF(a, b, 'DD')` | `date_diff('day', b, a)` | Informatica returns `a - b`. DuckDB takes the start first, so the argument order flips. |
+| `$$RUN_DATE` | `{{ var('run_date', '2025-12-31') }}` | Default comes from `MAPPINGVARIABLE` `12/31/2025 00:00:00`. |
+| `COUNT(*)`, `SUM`, `MAX`, `MIN` | same, lowercased | Valid only inside an Aggregator. Elsewhere the call is kept and a warning is recorded. |
+
+Golden strings and the rest of the function table are in `docs/expression-rules.md`. Those strings are the translation before any cast to the port type.
 
 ---
 
@@ -223,7 +255,7 @@ Encoding: the declaration says Windows-1252. .NET does not register that code pa
 
 | Case | Where in the sample | Handling |
 |---|---|---|
-| Declared encoding Windows-1252 | Line 1 | Register the code-page provider. Verify in Phase 1. |
+| Declared encoding Windows-1252 | Line 1 | Register the code-page provider before reading. The sample load covers this. |
 | External DTD `powrmart.dtd` | Line 2 | `DtdProcessing.Ignore`, `XmlResolver = null`. Missing DTD must not fail the load. |
 | Empty attribute values | 1,253 `VALUE=""` on table attributes | Treat as `null`, same as missing. |
 | Missing `EXPRESSION` on a port | 799 ports | Pass-through. The port takes the value of the connected input of the same name. It is not an error. |
@@ -256,6 +288,11 @@ Encoding: the declaration says Windows-1252. .NET does not register that code pa
 4. **Unsupported logic is flagged, never dropped.** Each unsupported item produces a diagnostic and an SQL comment.
 5. **dbt sources come from `SOURCE` definitions.** The schema comes from `OWNERNAME`, the connection from `DBDNAME`. Nothing is hard-coded to jaffle shop.
 6. **Tests from keys.** `PRIMARY KEY` gives `unique` and `not_null`. `FOREIGN KEY` gives `relationships`.
+7. **Mapping variables stay on the mapping.** `$$RUN_DATE` is declared on `m_FL_JS_MARTS_ENRICHED`, and that mapping's expressions are the ones that use it. A document-level dictionary would hide the owner.
+8. **Instance links are parsed, not reconstructed.** `InstanceDef` keeps `ASSOCIATED_SOURCE_INSTANCE` names and instance table attributes. That is how `RAW_PRODUCTS` and `RAW_PRODUCTS1` stay attached to the right source qualifier, and how `Pre SQL` truncate statements remain available to flag. Generation still does not infer incremental models from them (decision 2).
+9. **Foreign-key columns keep their reference.** `FieldDef` stores `REFERENCEDDBD`, `REFERENCEDTABLE` and `REFERENCEDFIELD` so relationship tests (decision 6) can be generated from the export.
+10. **Core SQL first.** Within the timebox, Source Qualifier, Expression, Filter, Joiner and Aggregator are translated before Router and Union. Sorter stays a no-op (decision 3). Anything not translated is still parsed, then emitted as a diagnostic and a `-- UNSUPPORTED` comment (decision 4). This export contains no Lookup.
+11. **Expression golden strings come from `docs/expression-rules.md`.** The translator prints those strings and does not yet cast the result to the port type. Integer division is unverified, so that cast waits. Identifiers are copied as written, including `TYPE`, because the checked strings leave it unquoted. An unmapped function or format token stays in the SQL, with a warning and a `/* UNSUPPORTED: ... */` comment. `SUM`, `MAX`, `MIN` and `COUNT` outside an Aggregator are kept and produce a warning.
 
 Jaffle shop has no direct counterpart for the 10 mart tables. The best comparison points are its `customers` and `orders` models. The other outputs can only be checked by reading the expressions.
 

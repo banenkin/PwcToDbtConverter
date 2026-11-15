@@ -1,7 +1,116 @@
-PROMPT LOG: Cursor
+# Prompt log: Cursor
+
 Date: 2026-11-14
-Scope: every prompt the user sent to Cursor for this project, in order. Prompts sent to Claude Code are in docs/prompts-claude.log.
+Tool: Cursor
+Scope: every prompt sent to Cursor in this project, in order, each followed by the reply to it. Prompts sent to Claude Code are in docs/prompts-claude.log.
 
-No prompts have been sent to Cursor yet, so there is no Cursor agent conversation to include. The full conversation for this project is in docs/prompts-claude.log.
+---
 
-The .cursorrules file was written by Claude Code from the prompt logged in docs/prompts-claude.log.
+## Prompt 1
+
+**Question**
+
+Read the architecture.md and start writing code step by step. Start with the first step as it is described there. One important constraint before we start coding: remember we have a ~4-hour timebox. Some of the time has already passed. Looking at the inventory (3 mappings, 16 targets, 98 transformations), let's make sure we prioritize core transformations (Source Qualifier, Expression, Filter, Joiner, Aggregator, Lookup) so that the main models (like `customers` and `orders`) compile and run cleanly, while relying on Decision #4 (emitting clear SQL comments + diagnostics) for any complex/exotic transformations we don't have time to implement. Let's start with Step 1 (Parse and inventory) and write the xUnit test verifying the exact counts (3 mappings, 16 targets, 12 sources, 98 transformations, 142 instances, 1066 connectors).
+If you have different proposal than the defined C# models and structures, propose it and explain why.
+
+**Answer**
+
+Step 1 is in place. The sample export parses into the domain model, and the inventory test matches the spec counts exactly.
+
+`Parse_SampleExport_MatchesInventoryCounts` loads `sample-data/FLOWLINE_DEMO_JAFFLESHOP.xml` and asserts 3 mappings, 16 targets, 12 sources, 98 transformations, 142 instances, and 1066 connectors. The same run also locks the kind split (28 source qualifiers, 25 expressions, 16 joiners, 15 sorters, 9 aggregators, 2 routers, 1 filter, 2 unions), the per-mapping connector counts (165 / 624 / 277), and the 1,183 port types. The sample produces no diagnostics. All 9 parser tests pass.
+
+The spec's records are the right shape, so I kept them. Four details in the sketch were too small for what the XML actually contains, and those are now decisions 7–10 in `specs/architecture.md`:
+
+- **Mapping variables sit on the mapping that declares them.** `$$RUN_DATE` (default `12/31/2025 00:00:00`) is a child of `m_FL_JS_MARTS_ENRICHED`, and that is the mapping whose expressions use it.
+- **`InstanceDef` keeps `ASSOCIATED_SOURCE_INSTANCE` and instance table attributes.** That is the link from `SQ_RAW_PRODUCTS1` to `RAW_PRODUCTS1`, and it preserves `Pre SQL` values such as `TRUNCATE TABLE STG.STG_CUSTOMERS` so they can be flagged later.
+- **`FieldDef` keeps `REFERENCEDDBD`, `REFERENCEDTABLE`, and `REFERENCEDFIELD`.** Foreign-key relationship tests need those three values, and they are already on `SOURCEFIELD`.
+- **`SourceDef`, `TargetDef`, `FieldDef`, and `KeyType` are written out.** The sketch named them and left the fields implicit.
+
+Lookup stays out of `TransformationKind`. This export has no Lookup transformation. An unknown type, including `Lookup Procedure`, becomes `Unsupported` plus a warning, which is the behavior decision 4 already calls for. Router and Union are parsed and classified now. Their SQL waits until Source Qualifier, Expression, Filter, Joiner, and Aggregator are generating models, so `customers` and `orders` can compile first.
+
+`System.Text.Encoding.CodePages` 8.0.0 is the one new package. The export declares `encoding="Windows-1252"`, which .NET does not register on its own. The test project now references `source/`.
+
+## Prompt 2
+
+**Question**
+
+Revert the last changes until i make an initial commit in the repo. Then you will apply them again
+
+**Answer**
+
+The project is back to the design-only starting point, ready for your initial commit.
+
+`specs/architecture.md` is the original spec again. The console app is the Hello World stub, the test project is the empty template test, and the parser, models, and inventory tests are removed. Build outputs from that work were cleaned as well.
+
+Tell me when the commit is in place and I will put the Step 1 changes back.
+
+## Prompt 3
+
+**Question**
+
+Now we have the repo and the initial commit - apply the changes again
+
+**Answer**
+
+Step 1 is back on top of the initial commit, and all 9 parser tests pass.
+
+The restored work includes the domain models, the PowerCenter XML parser, the inventory tests, the `System.Text.Encoding.CodePages` package reference, and the updated architecture spec. These changes are in the working tree and are not committed.
+
+## Prompt 4
+
+**Question**
+
+Check the specifications on /Users/nikolabanenkin/Repos/PwcToDbtConverter/docs. I need all the chat conversatio there - questions and answers, not additional unnecessary data. Since the start of this chat, and every new prompt added
+
+**Answer**
+
+`docs/prompts-cursor.log` now has each prompt from this Cursor chat and the reply that followed it, in the same question-and-answer form as `docs/prompts-claude.log`. Tool output is left out. New prompts will be appended here the same way.
+
+## Prompt 5
+
+**Question**
+
+There is a whole bunch of dlls as uncommited changes. i believe the source control system doesn't need to store them. If i am right, pleaseignore them in git ignore
+
+**Answer**
+
+You are right. DLLs and the rest of `bin/` and `obj/` are build output, so `.gitignore` now ignores those folders plus `*.dll` and `*.pdb`. The files stay on disk. Some `obj` files were already in the initial commit, so they are removed from the index and that removal is staged. It is not committed. The next commit should include `.gitignore` and those removals, or the old copies remain in history.
+
+## Prompt 6
+
+**Question**
+
+I see other files, that doesn't nee d to be commited, please check them and remove them if they are not from the source
+
+**Answer**
+
+`.gitignore` now also ignores `.DS_Store`, `.idea/`, and `*.user`. Those are macOS and Rider files, not project source. The copies already in the initial commit (`.DS_Store` and the `.idea` folder) are removed from the index and that removal is staged. The files stay on disk. `docs/graph-spec.md` is a design document, so it stays available to commit.
+
+## Prompt 7
+
+**Question**
+
+no files from /src /obj or .idea folders
+
+**Answer**
+
+Nothing from `obj/` or `.idea/` is in the index. `.gitignore` ignores `obj/`, `.idea/`, and `src/` (there is no `src` folder; the program lives in `source/`). The lines still listed for `obj/` and `.idea/` are staged deletions of files the initial commit already stored. Committing that removal is what drops them from the repository. `source/Model` and `source/Parsing` stay, because that is the converter code.
+
+## Prompt 8
+
+**Question**
+
+Let's implement Step 3: the Informatica-to-DuckDB Expression Translator, based on the mapping rules in @docs/expression-rules.md.
+
+Please:
+1. Create an `ExpressionTranslator` class in our core project that translates Informatica expression strings into DuckDB SQL expressions (handling functions like `IIF`, `ISNULL`, operators, port references, etc. as documented in `@docs/expression-rules.md`).
+2. Follow our architectural rule: if an expression contains an unsupported function or syntax we haven't mapped yet, do NOT drop it silently—flag it with a diagnostic warning and emit an inline SQL comment (e.g., `/* UNSUPPORTED: ... */`).
+3. Create an xUnit test file `ExpressionTranslatorTests.cs` with golden-string tests covering every mapping rule in `@docs/expression-rules.md` plus a test for unsupported expressions. 4. Keep in mind these four things to watch when you build the translator:
+- Date difference: DATE_DIFF(a, b, 'DD') means a - b in Informatica, but DuckDB's date_diff('day', start, end) takes the start first, so the arguments flip. I checked this with values: both give 30 days.
+- Division: DuckDB's / returns 3.5 for 7 / 2. This file mostly divides decimals, so the risk is low, but the translator should cast to the port's type. I haven't verified Informatica's integer-division rule.
+- $$RUN_DATE: the golden string uses a dbt var(), so it won't run as plain DuckDB SQL. The validation substitutes '2025-12-31', the mapping variable's default.
+- Aggregates: SUM, MAX, MIN and COUNT are valid only inside an Aggregator.
+
+**Answer**
+
+`ExpressionTranslator` parses each expression with a tokenizer and a recursive-descent parser and prints the DuckDB text from `docs/expression-rules.md`. All 40 golden strings pass, including the flipped `DATE_DIFF`, nested `IIF`, and `$$RUN_DATE` as `{{ var('run_date', '2025-12-31') }}`. An unmapped function or format token stays in the SQL with a warning and a `/* UNSUPPORTED: ... */` comment. `SUM`, `MAX`, `MIN` and `COUNT` outside an Aggregator are kept and produce a warning. The result is not cast to the port type yet: the golden strings are defined as the pre-cast text, and Informatica integer division is still unverified. `LTRIM(RTRIM(x))` stays nested, which replaces the older `trim(x)` note in the architecture spec.

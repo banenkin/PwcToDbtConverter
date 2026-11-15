@@ -100,3 +100,52 @@ Make it more-simple - just a question, as it was before, and then the answer in 
 **Answer**
 
 The log now has one question and one answer for each prompt you sent to Claude Code, with the answer being my final reply for that turn. The answer to this request is this line; the log was written before my reply to it was finished.
+
+## Prompt 6
+
+**Question**
+
+Next up is Step 2 (Graph: topological order, upstream closure, dangling-edge and cycle diagnostics).
+
+I will need an implementation and check into Cursor for the C# code, can you write down the concrete design and edge cases for this graph builder in `docs/graph-spec.md`?
+
+Keep it practical—define the C# data structures we'll need, how we walk backward from a target to get the upstream nodes, and what diagnostics we emit if there's a cycle or a broken connector. That way Cursor has a clear reference when implementing it.
+
+**Answer**
+
+I wrote `docs/graph-spec.md`, the Step 2 reference for Cursor. It covers the C# structures, the backward walk, the diagnostics, and the tests.
+
+- **Structures:** `DataFlowGraph` is an immutable class built only by the builder, with nodes keyed by instance name, edges as connectors, and per-instance upstream and downstream lists. `PortRef` keys the input ports. The builder returns a `GraphBuildResult` holding the graph and its diagnostics.
+- **Upstream walk:** `UpstreamOf` is an iterative backward walk over the upstream lists. It uses a visited set, so it ends even on a cyclic graph, and it returns instances in evaluation order.
+- **Topological order:** Kahn's algorithm, with in-degree counted per distinct upstream instance, not per connector. Otherwise an instance with 15 connectors from one upstream would never become ready.
+- **Diagnostics:** codes G001 to G018. A cycle is G001, with the path in the message. Broken connectors are G002 to G007. An Error blocks only the targets upstream of it. Warnings and Infos never block.
+- **Tests:** unit tests on in-code records, one per diagnostic code, and sample tests on the three real mappings with golden upstream counts for all 16 targets.
+
+Checks I ran on the sample before writing the spec: no dangling references, unknown fields, cycles, direction errors, duplicate input ports or duplicate port names. Every target has one incoming connector. The 18 multi-input instances are all Joiners or the Union template.
+
+Four decisions need your confirmation, and they are listed in section 9 of the spec:
+1. The builder takes the `PowerMartDocument` as a second parameter, because it needs source and target field lists.
+2. `Diagnostic` gets a `Code` field, so tests match codes rather than message text.
+3. A duplicate input keeps the first connector and drops the rest.
+4. Cycles block only their own targets.
+
+## Prompt 7
+
+**Question**
+
+Can you scan our sample XML for all the expression formulas inside `<TRANSFORMFIELD>` tags and list the unique Informatica functions/operators actually used in this file, along with their exact DuckDB SQL equivalents? Save this mapping table in `docs/expression-rules.md` so I can use it as the golden-string test cases when I build the translator in Cursor.
+
+**Answer**
+
+I wrote `docs/expression-rules.md`. It has the function and operator mapping table, 36 golden-string test cases, and the risks I found.
+
+- **Scope:** 384 `EXPRESSION` attributes on `TRANSFORMFIELD` tags, none empty, 211 unique after whitespace normalization. Three of them contain CRLF and indentation.
+- **Functions used:** IIF, ISNULL, SUM, MAX, MIN, COUNT, TRUNC, DATE_DIFF, TO_CHAR, TO_DATE, UPPER, LTRIM, RTRIM. Operators: `=`, `>`, `>=`, `<=`, `+`, `-`, `*`, `/`, AND, OR. Also `$$RUN_DATE`.
+- **Golden strings:** each one was run through DuckDB 1.4.5. All 36 parse and bind, and the value checks pass.
+- **Risks:**
+  - `DATE_DIFF(a, b)` has its arguments in the opposite order in DuckDB.
+  - DuckDB's `/` returns a fractional result for integers.
+  - `$$RUN_DATE` becomes a dbt var.
+  - Aggregate functions are valid only inside an Aggregator.
+
+The file also lists the Filter, Router and Join expressions, which use the same rules but are outside `TRANSFORMFIELD`.
