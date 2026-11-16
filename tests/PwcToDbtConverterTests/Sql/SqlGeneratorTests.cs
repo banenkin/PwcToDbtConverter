@@ -241,7 +241,8 @@ public class SqlGeneratorTests
 
         Assert.False(model.IsBlocked);
         Assert.Equal(2, Ancestors("m_FL_JS_MARTS_CORE", "PRODUCTS"));
-        Assert.Contains("{{ source('STG', 'STG_PRODUCTS') }}", model.Sql, StringComparison.Ordinal);
+        Assert.Contains("{{ ref('stg_products') }}", model.Sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("source('STG'", model.Sql, StringComparison.Ordinal);
         Assert.Contains("sq_stg_products", model.Sql, StringComparison.Ordinal);
         Assert.DoesNotContain("TODO [UNSUPPORTED]", model.Sql, StringComparison.Ordinal);
         Assert.Contains(
@@ -274,7 +275,7 @@ public class SqlGeneratorTests
 
         Assert.False(model.IsBlocked);
         Assert.StartsWith("with ", model.Sql, StringComparison.Ordinal);
-        Assert.Contains("{{ source(", model.Sql, StringComparison.Ordinal);
+        Assert.Contains("{{ ref('stg_customers') }}", model.Sql, StringComparison.Ordinal);
         foreach (FieldDef field in target.Fields)
         {
             Assert.Contains(field.Name, model.Sql, StringComparison.Ordinal);

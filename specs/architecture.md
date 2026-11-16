@@ -1,6 +1,6 @@
 # Architecture: PowerCenter XML to dbt converter
 
-Status: steps 1 through 4 are implemented. `SqlGenerator` produces one dbt model per target. The C# in section 3 matches the records in `source/Model`. Expression golden strings live in `docs/expression-rules.md`. The graph contract lives in `docs/graph-spec.md`.
+Status: steps 1 through 5 are implemented. A source written by another mapping is `{{ ref() }}` and is omitted from `sources.yml`. `dbt build` against jaffle shop is still a manual check. The C# in section 3 matches the records in `source/Model`. Expression golden strings live in `docs/expression-rules.md`. The graph contract lives in `docs/graph-spec.md`.
 
 Input: `sample-data/FLOWLINE_DEMO_JAFFLESHOP.xml` (728 KB, declares `encoding="Windows-1252"`, has a `<!DOCTYPE POWERMART SYSTEM "powrmart.dtd">`).
 Reference target: `dbt-labs/jaffle_shop_duckdb`, used to sanity-check output. Nothing in the converter may hard-code jaffle shop SQL.
@@ -34,7 +34,7 @@ Reference target: `dbt-labs/jaffle_shop_duckdb`, used to sanity-check output. No
 | `m_FL_JS_MARTS_ENRICHED` | `STG_*` (several aliased instances) | `CUSTOMER_360`, `ORDER_FINANCIALS`, `ORDER_ITEM_ENRICHED`, `PRODUCT_DAILY_PERFORMANCE`, `STORE_DAILY_KPIS` | Multi-way joins, router on `ORDER_TOTAL >= 50` (HIGH_VALUE / STANDARD) then union, aggregates by location-day and product-day, RFM recency/frequency/monetary scoring, `FIL_LOCS` filter `NOT ISNULL(LOCATION_ID)` |
 | `m_FL_JS_MARTS_CORE` | `STG_*` (several aliased instances) | `CUSTOMERS`, `ORDERS`, `ORDER_ITEMS`, `PRODUCTS`, `SUPPLIES` | Joins, aggregates by order and by customer, customer order sequencing (`EXP_CUSTOMER_ORDER_NUM`), days since last order based on `$$RUN_DATE` |
 
-Cross-mapping dependency: the `STG_*` tables are targets of `m_FL_JS_STAGING_FULL` and sources of the two mart mappings. In dbt this becomes `ref()`/`source()` chaining, so staging models must build before marts.
+Cross-mapping dependency: the `STG_*` tables are targets of `m_FL_JS_STAGING_FULL` and sources of the two mart mappings. Those reads are `{{ ref('stg_...') }}`, so dbt builds staging before the marts. `RAW_*` stays an external source.
 
 Output count: 16 target instances, so 16 dbt models if one model is produced per target instance.
 
@@ -211,14 +211,14 @@ Encoding: the declaration says Windows-1252. .NET does not register that code pa
 
 | Kind | SQL shape | Notes |
 |---|---|---|
-| Source Qualifier | `select ... from {{ source(owner, table) }}` | `owner` is `OWNERNAME`, then `DBDNAME`. `table` is the source definition name. A non-empty `Sql Query`, `Source Filter` or `User Defined Join` is a `-- TODO [UNSUPPORTED]` comment and the plain select is still emitted. |
+| Source Qualifier | `select ... from {{ source(owner, table) }}` or `{{ ref(model) }}` | `owner` is `OWNERNAME`, then `DBDNAME`. `table` is the source definition name. When another mapping writes that table, the read is `ref`. A non-empty `Sql Query`, `Source Filter` or `User Defined Join` is a `-- TODO [UNSUPPORTED]` comment and the plain select is still emitted. |
 | Expression | `select <expr> as <port>` | Ports with no expression pass through. |
 | Local variable | Nested `select *, <expr> as <name>` | Variables are evaluated in `Position` order. A `v_PREV_` variable, or a variable whose expression reads its own name, is previous-row state: the expression is kept, with a `-- TODO [UNSUPPORTED]` comment, because a window function would invent an `ORDER BY`. |
 | Filter | `where <condition>` | |
 | Joiner | `join` on `Join Condition` | `Normal Join` is inner. `Master Outer Join` is `master left join detail`. `Detail Outer Join` is `detail left join master`. `Full Outer Join` is a full outer join. |
 | Sorter | Pass-through | No `ORDER BY`. A comment says the sorter does not change the row set. |
 | Aggregator | `group by` for `GroupBy` ports, aggregate functions for the rest | Aggregates are allowed only in this shape. |
-| Lookup | `left join {{ source(owner, table) }}` | Connected outputs come from the upstream input. Unconnected outputs come from the lookup table. |
+| Lookup | `left join {{ source(owner, table) }}` or `{{ ref(model) }}` | Connected outputs come from the upstream input. Unconnected outputs come from the lookup table. A lookup table written by another mapping is a `ref`. |
 | Router, Union, anything else | Pass-through select plus `-- TODO [UNSUPPORTED]` | Output ports with an incoming connector keep that column. Other outputs are `null`. A warning is recorded. The logic is not dropped. |
 
 ### 4.3 Expression translation
@@ -279,8 +279,10 @@ Golden strings and the rest of the function table are in `docs/expression-rules.
 9. **Foreign-key columns keep their reference.** `FieldDef` stores `REFERENCEDDBD`, `REFERENCEDTABLE` and `REFERENCEDFIELD` so relationship tests (decision 6) can be generated from the export.
 10. **Core SQL first.** Within the timebox, Source Qualifier, Expression, Filter, Joiner and Aggregator are translated before Router and Union. Sorter stays a no-op (decision 3). Anything not translated is still parsed, then emitted as a diagnostic and a `-- UNSUPPORTED` comment (decision 4). This export contains no Lookup.
 11. **Expression golden strings come from `docs/expression-rules.md`.** The translator prints those strings and does not yet cast the result to the port type. Integer division is unverified, so that cast waits. Identifiers are copied as written, including `TYPE`, because the checked strings leave it unquoted. An unmapped function or format token stays in the SQL, with a warning and a `/* UNSUPPORTED: ... */` comment. `SUM`, `MAX`, `MIN` and `COUNT` outside an Aggregator are kept and produce a warning.
-12. **Joiner outer join preserves the named side.** `Master Outer Join` keeps every master row (`master left join detail`). `Detail Outer Join` keeps every detail row. Informatica's joiner guide defines it this way. Source instances are read with `{{ source(owner, table) }}`, using `OWNERNAME` and the source definition name. A model-level gap is a `-- TODO [UNSUPPORTED]` comment.
+12. **Joiner outer join preserves the named side.** `Master Outer Join` keeps every master row (`master left join detail`). `Detail Outer Join` keeps every detail row. Informatica's joiner guide defines it this way. External source instances are read with `{{ source(owner, table) }}`, using `OWNERNAME` and the source definition name. A model-level gap is a `-- TODO [UNSUPPORTED]` comment.
 13. **Previous-row variables are marked, not rewritten.** A variable named `v_PREV_*`, or one whose expression reads its own name, assumes the previous row. `SqlGenerator` keeps the translated expression, adds `-- TODO [UNSUPPORTED]`, and records a warning. Guessing `row_number()` would invent a sort key the expression does not state. Sorter stays a pass-through with no `ORDER BY` (decision 3).
+14. **The dbt project is laid out from the mapping name.** A mapping whose name contains `STAGING` is written under `models/staging`. One that contains `CORE` goes under `models/marts/core`. One that contains `MART` goes under `models/marts`. Anything else stays in `models/`. The model file name is the target instance name, lowercased, so `ORDER_FINANCIALS1` does not collide with a definition named `ORDER_FINANCIALS`. `schema.yml` adds `not_null` and `unique` only for `KEYTYPE="PRIMARY KEY"`. Relationship tests from foreign keys are not written yet.
+15. **A source that another mapping writes is a `ref`.** The graph stays inside one mapping. When a source definition name equals a target instance's transformation name in a different mapping, the SQL reads `{{ ref('model_name') }}` and that table is left out of `sources.yml`. `RAW_*` stays `{{ source('RAW', ...) }}` because nothing in the export writes those tables. If several models write the same target, the one whose instance name matches the definition is used.
 
 Jaffle shop has no direct counterpart for the 10 mart tables. The best comparison points are its `customers` and `orders` models. The other outputs can only be checked by reading the expressions.
 

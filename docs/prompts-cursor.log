@@ -124,3 +124,66 @@ Using our dependency graph (topological order + upstream closure) and `Expressio
 **Answer**
 
 `SqlGenerator` builds one DuckDB dbt model per target. Source instances become `{{ source(owner, table) }}`, with the owner taken from `OWNERNAME` and the table from the source definition name. Every other upstream instance is a CTE in topological order, and the final `select` lists the target columns. Source Qualifier, Expression, Filter, Joiner, Aggregator, Lookup and Sorter are translated. `Master Outer Join` keeps the master side. Sorter is a pass-through with no `ORDER BY`. A `v_PREV_` variable, or a variable that reads its own name, is kept and marked `-- TODO [UNSUPPORTED]` rather than turned into a guessed `row_number()`, because the expression does not state the sort key. Router, Union and any other kind get the same comment plus a warning, and their connected columns are still projected. `dotnet test` passes: 66 tests. The sample checks are `STG_CUSTOMERS`, core `PRODUCTS`, and enriched `CUSTOMER_360`.
+
+## Prompt 10
+
+**Question**
+
+1. Build a `DbtProjectWriter` class that writes a complete, runnable dbt project to an output directory (e.g., `./output_dbt`), containing:
+   - `dbt_project.yml` configured with `materialized: table` as the default materialization for our models.
+   - `models/sources.yml` dynamically generated from the XML `<SOURCE>` definitions (using `OWNERNAME` as the source name and the source table definitions).
+   - `models/<model_name>.sql` for each generated target model (organized cleanly, e.g., staging vs. marts/core if inferable, or flat in `models/`—keep it clean and valid for dbt).
+   - `models/schema.yml` with basic column descriptions and `not_null` / `unique` tests where primary keys are defined in the XML `<TARGETFIELD>` metadata (`KEYTYPE="PRIMARY KEY"`).
+2. Wire up the CLI entry point (`Program.cs`) so running `dotnet run -- <input.xml> <output_dir>` parses the XML, builds the graph, generates all SQL models, writes the dbt project, and prints a clear summary report to the console (counts of mappings, targets, generated models, and any diagnostic warnings / unsupported features).
+3. Add integration tests verifying the generated file structure and YAML validity, then run `dotnet test`.
+4. Run the CLI against our sample XML file to generate the dbt project in `./output_dbt`.
+
+**Answer**
+
+`dotnet run -- sample-data/FLOWLINE_DEMO_JAFFLESHOP.xml output_dbt` writes a dbt project with 3 mappings, 16 targets and 16 models. Staging models are under `models/staging`, core models under `models/marts/core`, and the enriched models under `models/marts`. `sources.yml` uses `OWNERNAME` (`RAW` and `STG`) as the source name. `schema.yml` describes every target column from its datatype. This export has no `PRIMARY KEY` on a target field, so the sample schema has no `not_null` or `unique` tests; a fixture with `KEYTYPE="PRIMARY KEY"` does emit both. The run reports 0 errors and 11 warnings: two routers, two unions, and previous-row variables. `dotnet test` passes: 68 tests. `output_dbt/` is gitignored.
+
+## Prompt 11
+
+**Question**
+
+1. Install `dbt` and `dbt-duckdb` are installed in the environment (or set up a local virtual environment if possible). 2. Fetch or inspect the seed CSV files from `https://github.com/dbt-labs/jaffle_shop_duckdb` (`raw_customers.csv`, `raw_orders.csv`, `raw_payments.csv`, plus any additional seeds referenced in `output_dbt/models/sources.yml`), and configure a local `profiles.yml` for DuckDB inside `output_dbt/` (make sure it stays gitignored). 3. Run `dbt seed` and `dbt build` inside `output_dbt/` to see which of the 16 generated models build cleanly and which ones fail (either due to unsupported Informatica constructs like Router/Union or `STG` source references). 4. Report the exact `dbt build` results—especially comparing our generated `customers` and `orders` models against `jaffle_shop_duckdb`. Do NOT hack or edit the generated files inside `output_dbt/`; if there is a systematic generator bug in our C# code that we can cleanly fix, show me what failed first.
+
+**Answer**
+
+dbt Core 1.12.7 and dbt-duckdb 1.11.1 are installed in `.venv`. `dbt seed` loaded the three published jaffle shop CSVs into schema `RAW` (100 customers, 99 orders, 113 payments). The repo has no CSV for `RAW_ITEMS`, `RAW_PRODUCTS`, `RAW_STORES`, `RAW_SUPPLIES`, or any `STG_*` table. `dbt build` then failed all 16 models: `stg_customers` has no column `NAME` (the seed has `id`, `first_name`, `last_name`), `stg_orders` has no column `CUSTOMER` (the seed has `id`, `user_id`, `order_date`, `status`), the other four staging models cannot see their RAW tables, and all 10 mart models fail because schema `STG` does not exist. A second run with empty tables for the four unpublished RAW sources let `stg_locations`, `stg_products`, `stg_order_items`, and `stg_supplies` create empty tables. The marts, including `customers` and `orders`, still stop on `source('STG', ...)`. Those two models also select a different column set from the public jaffle shop models, so there is no row comparison. Generated SQL was left as the converter wrote it.
+
+---
+
+## Prompt 12
+
+**Question**
+
+I noticed that data/tables are being passed between different mappings in the XML - target produced by one mapping is used as a source in another. I'd like the converter to handle this properly instead of failing on missing external sources. If it makes sense architecturally, let's implement it; if not, tell me why. The pasted `dbt build` log was PASS=7 ERROR=12 TOTAL=19: ten mart models failed because schema `STG` does not exist (`STG.STG_CUSTOMERS`, `STG.STG_ORDERS`, `STG.STG_ORDER_ITEMS`, `STG.STG_PRODUCTS`, `STG.STG_SUPPLIES`), `stg_customers` failed because column `NAME` is not in the seed (`first_name`), and `stg_orders` failed because column `CUSTOMER` is not in the seed (`id`).
+
+**Answer**
+
+It belongs in SQL generation, not in the graph. Each mapping still has its own graph. When a source definition name equals a target written by a different mapping, the model reads `{{ ref('stg_customers') }}` (and the same for the other five staging models) and that table is left out of `sources.yml`. `RAW_*` stays `{{ source('RAW', ...) }}`. Decision 15 in `specs/architecture.md` records this. 68 tests pass. Regenerating `output_dbt` and running `dbt build` gives PASS=9 ERROR=2 SKIP=8 TOTAL=19. The missing `STG` schema is gone. `products` and `supplies` build through `ref()`. The two errors are still `stg_customers` (`NAME` vs `first_name`) and `stg_orders` (`CUSTOMER` vs `id`). The eight marts that read those models are skipped by dbt because their upstream failed.
+
+---
+
+## Prompt 13
+
+**Question**
+
+There are 2 more errors; For me it seems that they are caused by badly generated test files. If i am write can you regenerate them, otherwise tell me why: the pasted `dbt build` log was PASS=9 ERROR=2 SKIP=8 TOTAL=19. `stg_orders` failed with column `CUSTOMER` not found (candidate `id`). `stg_customers` failed with column `NAME` not found (candidate `first_name`).
+
+**Answer**
+
+These are model SQL errors, raised while dbt creates the tables. `schema.yml` for `stg_customers` and `stg_orders` only has column descriptions, and a bad test would be reported as a test failure after the model had already built. The SQL follows the PowerCenter source: `RAW_CUSTOMERS` is `ID, NAME` and `RAW_ORDERS` is `ID, CUSTOMER, ORDERED_AT, STORE_ID, SUBTOTAL, TAX_PAID, ORDER_TOTAL`. The jaffle shop seeds are `id, first_name, last_name` and `id, user_id, order_date, status`. Regenerating the YAML would leave the same `select`. Mapping those seed names onto the Informatica columns would hard-code jaffle shop, which the converter is not allowed to do.
+
+---
+
+## Prompt 14
+
+**Question**
+
+I just want to verify end-to-end execution in DuckDB. Can you generate small synthetic CSV files (5-10 rows each) in `output_dbt/seeds/` matching the exact `<SOURCE>` columns from the XML (`RAW_CUSTOMERS` with `ID, NAME`, `RAW_ORDERS` with `ID, CUSTOMER, ...`, plus `RAW_ITEMS`, `RAW_PRODUCTS`, `RAW_STORES`, `RAW_SUPPLIES`), run `dbt seed` and `dbt build`, and show me the result?
+
+**Answer**
+
+Six synthetic seeds were written under `output_dbt/seeds/` with the XML source columns: `raw_customers` 6, `raw_orders` 8, `raw_items` 10, `raw_products` 6, `raw_stores` 5, `raw_supplies` 8. `dbt seed --full-refresh` loaded all six into schema `RAW` (PASS=6). `dbt build` then reported PASS=18 ERROR=4 SKIP=0 TOTAL=22. All six staging models built, and so did `customers`, `products`, `supplies`, `order_items`, `order_item_enriched`, and `product_daily_performance`. `orders`, `customer_360`, `order_financials1`, and `store_daily_kpis` fail in DuckDB because `v_ORDER_SEQUENCE` is referenced in the same SELECT that defines it. `stg_locations` builds, but its columns are null because the router and union are still unsupported.

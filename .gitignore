@@ -5,6 +5,13 @@ src/
 *.dll
 *.pdb
 
+# Generated dbt project. Recreated by `dotnet run -- <xml> output_dbt`.
+output_dbt/
+
+# Local dbt install and any DuckDB file created outside output_dbt/.
+.venv/
+jaffle_shop.duckdb
+
 # Editor and OS files. Local to one machine.
 .DS_Store
 .idea/

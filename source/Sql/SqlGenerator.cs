@@ -7,7 +7,8 @@ namespace PwcToDbtConverter.Sql;
 
 /// <summary>
 /// Turns the upstream closure of one target into a dbt model: one CTE per instance, in topological order,
-/// then a final select of the target columns. Source instances are read with <c>{{ source(...) }}</c>.
+/// then a final select of the target columns. An external source is <c>{{ source(...) }}</c>.
+/// A source written by another mapping in the same export is <c>{{ ref(...) }}</c>.
 /// </summary>
 public sealed class SqlGenerator : IModelSqlGenerator
 {
@@ -132,13 +133,7 @@ public sealed class SqlGenerator : IModelSqlGenerator
             fields = ["null as missing"];
         }
 
-        string schema = source.OwnerName ?? source.DbdName ?? "unknown";
-        if (source.OwnerName is null && source.DbdName is null)
-        {
-            Unsupported(instance.Name, "Source '" + instance.Name + "' has no owner or connection name.");
-        }
-
-        return Select(fields) + "\nfrom " + SourceCall(schema, source.Name);
+        return Select(fields) + "\nfrom " + ReadFrom(instance.Name, source.Name, source.OwnerName, source.DbdName);
     }
 
     private string EmitTransformation(InstanceDef instance)
@@ -375,7 +370,7 @@ public sealed class SqlGenerator : IModelSqlGenerator
             owner = source?.OwnerName ?? source?.DbdName;
         }
 
-        if (owner is null)
+        if (owner is null && DbtModelNames.RefFor(_document, _mapping.Name, table) is null)
         {
             Unsupported(instance.Name, "Lookup '" + instance.Name + "' has no source owner.");
             owner = "unknown";
@@ -401,7 +396,7 @@ public sealed class SqlGenerator : IModelSqlGenerator
             + "\nfrom "
             + Relation(instance.Name, warnOnMany: true)
             + " input\nleft join "
-            + SourceCall(owner, table)
+            + ReadFrom(instance.Name, table, owner, null)
             + " lookup\n    on "
             + on;
     }
@@ -744,8 +739,20 @@ public sealed class SqlGenerator : IModelSqlGenerator
         return "\"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
     }
 
-    private static string SourceCall(string schema, string table)
+    private string ReadFrom(string instanceName, string table, string? owner, string? dbd)
     {
+        string? model = DbtModelNames.RefFor(_document, _mapping.Name, table);
+        if (model is not null)
+        {
+            return "{{ ref('" + Escape(model) + "') }}";
+        }
+
+        string schema = owner ?? dbd ?? "unknown";
+        if (owner is null && dbd is null)
+        {
+            Unsupported(instanceName, "Source '" + instanceName + "' has no owner or connection name.");
+        }
+
         return "{{ source('" + Escape(schema) + "', '" + Escape(table) + "') }}";
     }
 
