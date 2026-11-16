@@ -285,15 +285,16 @@ public sealed class SqlGenerator : IModelSqlGenerator
         string right;
         if (string.Equals(type, "Master Outer Join", StringComparison.Ordinal))
         {
+            // The name is the side whose unmatched rows are dropped. Detail rows are kept.
             keyword = "left join";
-            left = master;
-            right = detail;
+            left = detail;
+            right = master;
         }
         else if (string.Equals(type, "Detail Outer Join", StringComparison.Ordinal))
         {
             keyword = "left join";
-            left = detail;
-            right = master;
+            left = master;
+            right = detail;
         }
         else if (string.Equals(type, "Full Outer Join", StringComparison.Ordinal))
         {

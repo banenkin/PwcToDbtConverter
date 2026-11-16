@@ -92,13 +92,24 @@ public class SqlGeneratorTests
     }
 
     [Fact]
-    public void Generate_Joiner_MasterOuterKeepsMasterRows()
+    public void Generate_Joiner_MasterOuterKeepsDetailRows()
     {
         SqlModel model = Generate(Joiner("Master Outer Join"));
 
         Assert.False(model.IsBlocked);
+        Assert.Contains(") detail\n    left join (", model.Sql, StringComparison.Ordinal);
+        Assert.Contains(") master\n", model.Sql, StringComparison.Ordinal);
+        Assert.DoesNotContain(") master\n    left join (", model.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_Joiner_DetailOuterKeepsMasterRows()
+    {
+        SqlModel model = Generate(Joiner("Detail Outer Join"));
+
+        Assert.False(model.IsBlocked);
         Assert.Contains(") master\n    left join (", model.Sql, StringComparison.Ordinal);
-        Assert.DoesNotContain("inner join", model.Sql, StringComparison.Ordinal);
+        Assert.DoesNotContain(") detail\n    left join (", model.Sql, StringComparison.Ordinal);
     }
 
     [Fact]

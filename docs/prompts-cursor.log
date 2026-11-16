@@ -187,3 +187,15 @@ I just want to verify end-to-end execution in DuckDB. Can you generate small syn
 **Answer**
 
 Six synthetic seeds were written under `output_dbt/seeds/` with the XML source columns: `raw_customers` 6, `raw_orders` 8, `raw_items` 10, `raw_products` 6, `raw_stores` 5, `raw_supplies` 8. `dbt seed --full-refresh` loaded all six into schema `RAW` (PASS=6). `dbt build` then reported PASS=18 ERROR=4 SKIP=0 TOTAL=22. All six staging models built, and so did `customers`, `products`, `supplies`, `order_items`, `order_item_enriched`, and `product_daily_performance`. `orders`, `customer_360`, `order_financials1`, and `store_daily_kpis` fail in DuckDB because `v_ORDER_SEQUENCE` is referenced in the same SELECT that defines it. `stg_locations` builds, but its columns are null because the router and union are still unsupported.
+
+---
+
+## Prompt 15
+
+**Question**
+
+Check four considerations: Router and Union emit nulls; Master Outer Join keeps the master while the Informatica docs keep the detail; row-order variables still emit the current-row expression; blocked models are still written. The joiner is the one to fix after checking the docs.
+
+**Answer**
+
+The PowerCenter 10.5 transformation guide says a Master Outer Join keeps every detail row and drops unmatched master rows. Section 4.2 and decision 12 said the opposite, and the generator followed them. `EmitJoiner` now writes `detail left join master` for Master Outer and `master left join detail` for Detail Outer. The test is `Generate_Joiner_MasterOuterKeepsDetailRows`, with a Detail Outer companion. 69 tests pass, and `output_dbt` was regenerated. Router, Union, row-order variables, and blocked-model writing are confirmed and left as they are.
